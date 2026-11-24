@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- 燃气表轮廓 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M36,30 h36 a6,6 0 0 1 6,6 v36 a6,6 0 0 1 -6,6 h-36 a6,6 0 0 1 -6,-6 v-36 a6,6 0 0 1 6,-6 z M36,36 v36 h36 v-36 z" />
+    <!-- 表盘窗口 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M40,44 h28 v12 h-28 z" />
+    <!-- 指针/火焰 -->
+    <path
+        android:fillColor="#0E6E4F"
+        android:pathData="M48,53 h2 v-6 h2 v6 h2 v-4 h2 v4 h2 v-6 h2 v6 h2 v3 h-14 z" />
+    <!-- 下方刻度 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M42,62 h6 v3 h-6 z M52,62 h6 v3 h-6 z M62,62 h6 v3 h-6 z" />
+</vector>

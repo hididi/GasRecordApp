@@ -1,0 +1,14 @@
+# 可忽略的产物
+.gradle/
+.gradle-home/
+.kotlin/
+build/
+app/build/
+local.properties
+*.iml
+.idea/
+.DS_Store
+captures/
+.externalNativeBuild/
+.cxx/
+keystore/
