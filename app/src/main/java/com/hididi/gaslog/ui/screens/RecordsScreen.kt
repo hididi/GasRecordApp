@@ -26,6 +26,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -37,6 +38,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.hididi.gaslog.domain.Dates
 import com.hididi.gaslog.domain.DayUsage
+import com.hididi.gaslog.domain.HeatingDegreeUsageEstimator
 import com.hididi.gaslog.domain.UsageCalculator
 import com.hididi.gaslog.domain.Units
 import com.hididi.gaslog.ui.components.EmptyHint
@@ -75,8 +77,21 @@ fun RecordsScreen(
         d >= fromTo.first && d <= fromTo.second
     }.sortedByDescending { it.epochMillis }
 
-    val dayUsage = remember(snapshot.readings, fromTo) {
-        UsageCalculator.dailyUsage(snapshot.readings, fromTo.first, fromTo.second).associateBy { it.date }
+    val dayUsageBase = remember(snapshot.readings, fromTo) {
+        UsageCalculator.dailyUsage(snapshot.readings, fromTo.first, fromTo.second)
+    }
+    val dataVersion by vm.dataVersion.collectAsStateWithLifecycle()
+    LaunchedEffect(fromTo) { vm.ensureSunTimes(fromTo.first, fromTo.second) }
+    val usageEstimate = remember(snapshot.readings, fromTo, dataVersion) {
+        HeatingDegreeUsageEstimator.estimate(
+            points = snapshot.readings,
+            from = fromTo.first,
+            to = fromTo.second,
+            sunProvider = { date -> vm.sunTimesFor(date) },
+        )
+    }
+    val dayUsage = remember(dayUsageBase, usageEstimate) {
+        dayUsageBase.map { day -> day.copy(volumeM3 = usageEstimate.dailyM3(day.date)) }.associateBy { it.date }
     }
 
     Scaffold(

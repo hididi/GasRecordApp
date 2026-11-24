@@ -35,6 +35,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -57,6 +58,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.hididi.gaslog.domain.DailyTemp
 import com.hididi.gaslog.domain.Dates
+import com.hididi.gaslog.domain.DayUsage
+import com.hididi.gaslog.domain.HeatingDegreeUsageEstimator
 import com.hididi.gaslog.domain.ReadingPoint
 import com.hididi.gaslog.domain.Units
 import com.hididi.gaslog.domain.UsageCalculator
@@ -74,6 +77,19 @@ internal enum class DetailSwipeTarget {
     Current,
     Next,
 }
+
+internal data class DetailNavigationState(val activeIndex: Int, val offsetX: Float)
+
+/** Commits the index before settling, so the next drag always starts from the visible card. */
+internal fun detailNavigationState(
+    activeIndex: Int,
+    dragOffsetX: Float,
+    width: Int,
+    direction: Int,
+): DetailNavigationState = DetailNavigationState(
+    activeIndex = activeIndex - direction,
+    offsetX = dragOffsetX - direction * width,
+)
 
 internal fun detailSwipeTarget(
     dragOffsetX: Float,
@@ -109,6 +125,30 @@ fun ReadingDetailScreen(
     val sorted = remember(snapshot.readings) { snapshot.readings.sortedBy { it.epochMillis } }
     val reading = sorted.firstOrNull { it.id == currentId }
     val idx = sorted.indexOfFirst { it.id == currentId }
+    val visibleDates = remember(sorted, idx) {
+        listOfNotNull(
+            sorted.getOrNull(idx - 1),
+            sorted.getOrNull(idx),
+            sorted.getOrNull(idx + 1),
+        ).map { Dates.dateOf(it.epochMillis) }.distinct().sorted()
+    }
+    val dataVersion by vm.dataVersion.collectAsStateWithLifecycle()
+    if (visibleDates.isNotEmpty()) {
+        val from = visibleDates.first()
+        val to = visibleDates.last()
+        LaunchedEffect(from, to) { vm.ensureSunTimes(from, to) }
+        val usageEstimate = remember(snapshot.readings, from, to, dataVersion) {
+            HeatingDegreeUsageEstimator.estimate(
+                points = snapshot.readings,
+                from = from,
+                to = to,
+                sunProvider = { date -> vm.sunTimesFor(date) },
+            )
+        }
+        val dayUsage = remember(snapshot.readings, visibleDates, usageEstimate) {
+            UsageCalculator.dailyUsage(snapshot.readings, from, to)
+                .associate { it.date to it.copy(volumeM3 = usageEstimate.dailyM3(it.date)) }
+        }
     suspend fun animateOffset(target: Float) {
         Animatable(dragOffsetX).animateTo(
             target,
@@ -128,12 +168,11 @@ fun ReadingDetailScreen(
             return
         }
         settleJob?.cancel()
+        val state = detailNavigationState(idx, dragOffsetX, contentWidth, direction)
+        currentId = id
+        dragOffsetX = state.offsetX
         settleJob = scope.launch {
-            animateOffset(direction * width)
-            currentId = id
-            // The target page is already visible at this offset. Resetting both
-            // state values keeps it in place when it becomes the current page.
-            dragOffsetX = 0f
+            animateOffset(0f)
         }
     }
 
@@ -173,7 +212,7 @@ fun ReadingDetailScreen(
                 .fillMaxSize()
                 .padding(padding)
                 .onSizeChanged { contentWidth = it.width }
-                .pointerInput(reading.id, idx, contentWidth) {
+                .pointerInput(currentId, contentWidth, sorted.map { it.id }) {
                     detectHorizontalDragGestures(
                         onDragStart = { settleJob?.cancel() },
                         onDragCancel = { springBack() },
@@ -207,7 +246,7 @@ fun ReadingDetailScreen(
                         reading = previous,
                         sorted = sorted,
                         index = idx - 1,
-                        allReadings = snapshot.readings,
+                        dayUsage = dayUsage[Dates.dateOf(previous.epochMillis)],
                         onShowZoom = { showZoom = true },
                         onRefreshWeather = { vm.refreshWeatherForDate(Dates.dateOf(previous.epochMillis)) },
                         onPrevious = {},
@@ -221,7 +260,7 @@ fun ReadingDetailScreen(
                         reading = next,
                         sorted = sorted,
                         index = idx + 1,
-                        allReadings = snapshot.readings,
+                        dayUsage = dayUsage[Dates.dateOf(next.epochMillis)],
                         onShowZoom = { showZoom = true },
                         onRefreshWeather = { vm.refreshWeatherForDate(Dates.dateOf(next.epochMillis)) },
                         onPrevious = {},
@@ -234,13 +273,14 @@ fun ReadingDetailScreen(
                     reading = reading,
                     sorted = sorted,
                     index = idx,
-                    allReadings = snapshot.readings,
+                    dayUsage = dayUsage[Dates.dateOf(reading.epochMillis)],
                     onShowZoom = { showZoom = true },
                     onRefreshWeather = { vm.refreshWeatherForDate(Dates.dateOf(reading.epochMillis)) },
                     onPrevious = { sorted.getOrNull(idx - 1)?.let { navigateTo(it.id, 1) } },
                     onNext = { sorted.getOrNull(idx + 1)?.let { navigateTo(it.id, -1) } },
                 )
             }
+        }
         }
     }
 
@@ -271,7 +311,7 @@ private fun DetailPage(
     reading: ReadingPoint,
     sorted: List<ReadingPoint>,
     index: Int,
-    allReadings: List<ReadingPoint>,
+    dayUsage: DayUsage?,
     onShowZoom: () -> Unit,
     onRefreshWeather: () -> Unit,
     onPrevious: () -> Unit,
@@ -280,12 +320,6 @@ private fun DetailPage(
 ) {
     val prev = sorted.getOrNull(index - 1)
     val next = sorted.getOrNull(index + 1)
-    val dayUsage = UsageCalculator.dailyUsage(
-        allReadings,
-        Dates.dateOf(reading.epochMillis),
-        Dates.dateOf(reading.epochMillis),
-    ).firstOrNull()
-
     LazyColumn(
         modifier
             .fillMaxSize(),

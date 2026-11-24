@@ -99,7 +99,7 @@ object Insights {
                 out += Insight(
                     InsightLevel.INFO,
                     "已经 $gap 天没有抄表",
-                    "补拍一张表照可以让区间用量更准确；间隔越长，均摊推算的误差越大。",
+                    "补拍一张表照可以让区间用量更准确；间隔越长，估算分摊的不确定性越大。",
                 )
             }
         } else {
@@ -139,7 +139,7 @@ object Insights {
         return out
     }
 
-    /** 最近 N 天均摊推算 + 本月预测 */
+    /** 最近 N 天日用量 + 本月预测 */
     fun projectMonth(
         daily: List<DayUsage>,
         today: LocalDate,

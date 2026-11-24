@@ -34,6 +34,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -47,6 +48,7 @@ import com.hididi.gaslog.domain.BillingReplay
 import com.hididi.gaslog.domain.CostEngine
 import com.hididi.gaslog.domain.Dates
 import com.hididi.gaslog.domain.Insights
+import com.hididi.gaslog.domain.HeatingDegreeUsageEstimator
 import com.hididi.gaslog.domain.PaymentInfo
 import com.hididi.gaslog.domain.TierDef
 import com.hididi.gaslog.domain.Units
@@ -99,11 +101,31 @@ fun BillingScreen(vm: GasLogViewModel) {
     val rangeSummary = remember(snapshot.readings, from, to) {
         UsageCalculator.summarize(snapshot.readings, from, to)
     }
-    val quote = remember(snapshot.tiers, stateAtStart, rangeSummary.volumeM3) {
-        CostEngine.quote(stateAtStart, snapshot.tiers, rangeSummary.volumeM3)
+    val recentFrom = today.minusDays(29)
+    val dailyBase = remember(snapshot.readings, today) {
+        UsageCalculator.dailyUsage(snapshot.readings, recentFrom, today)
     }
-    val daily = remember(snapshot.readings, today) {
-        UsageCalculator.dailyUsage(snapshot.readings, today.minusDays(29), today)
+    val estimateFrom = minOf(from, recentFrom)
+    val estimateTo = maxOf(to, today)
+    val dataVersion by vm.dataVersion.collectAsStateWithLifecycle()
+    LaunchedEffect(estimateFrom, estimateTo) { vm.ensureSunTimes(estimateFrom, estimateTo) }
+    val usageEstimate = remember(snapshot.readings, estimateFrom, estimateTo, dataVersion) {
+        HeatingDegreeUsageEstimator.estimate(
+            points = snapshot.readings,
+            from = estimateFrom,
+            to = estimateTo,
+            sunProvider = { date -> vm.sunTimesFor(date) },
+        )
+    }
+    val rangeDays = remember(rangeSummary.dayList, usageEstimate) {
+        rangeSummary.dayList.map { day -> day.copy(volumeM3 = usageEstimate.dailyM3(day.date)) }
+    }
+    val rangeVolume = rangeDays.sumOf { it.volumeM3 }
+    val quote = remember(snapshot.tiers, stateAtStart, rangeVolume) {
+        CostEngine.quote(stateAtStart, snapshot.tiers, rangeVolume)
+    }
+    val daily = remember(dailyBase, usageEstimate) {
+        dailyBase.map { day -> day.copy(volumeM3 = usageEstimate.dailyM3(day.date)) }
     }
     val projection = remember(snapshot, daily, state) {
         Insights.projectMonth(daily, today, state, snapshot.tiers)
@@ -278,7 +300,7 @@ fun BillingScreen(vm: GasLogViewModel) {
                         left = {
                             MetricTile(
                                 label = "区间用气量",
-                                value = "${Units.formatVolume(rangeSummary.volumeM3)} m³",
+                                value = "${Units.formatVolume(rangeVolume)} m³",
                                 sub = "${rangeSummary.days} 天，含估算 ${rangeSummary.estimatedDays} 天",
                             )
                         },
@@ -304,7 +326,7 @@ fun BillingScreen(vm: GasLogViewModel) {
                         Spacer(Modifier.height(6.dp))
                         NoticeCard("WARN", "注意", it)
                     }
-                    if (quote.lines.isEmpty() && rangeSummary.volumeM3 > 0) {
+                    if (quote.lines.isEmpty() && rangeVolume > 0) {
                         Spacer(Modifier.height(6.dp))
                         NoticeCard("WARN", "无法计价", "请先在「阶梯气价」里填写价格。")
                     }
@@ -355,7 +377,7 @@ fun BillingScreen(vm: GasLogViewModel) {
                     "INFO",
                     "费用口径说明",
                     "费用 = 从「区间起点时的阶梯位置」开始，按各档单价逐段累加；区间起点位置由最近一次交费记录 + 期间真实表读数推进得到。" +
-                        "估算只影响用气量（均摊），不改变单价。实际账单以燃气公司数据为准。",
+                        "估算只影响用气量分摊，不改变单价。实际账单以燃气公司数据为准。",
                 )
             }
             item { Spacer(Modifier.height(24.dp)) }

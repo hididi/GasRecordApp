@@ -1,6 +1,9 @@
 package com.hididi.gaslog.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -17,6 +20,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
@@ -36,6 +40,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
@@ -43,10 +48,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.hididi.gaslog.domain.CostEngine
-import com.hididi.gaslog.domain.DayNightCalculator
 import com.hididi.gaslog.domain.DayNightUsage
 import com.hididi.gaslog.domain.Dates
 import com.hididi.gaslog.domain.DailyTemp
+import com.hididi.gaslog.domain.HeatingDegreeUsageEstimator
 import com.hididi.gaslog.domain.UsageCalculator
 import com.hididi.gaslog.domain.Units
 import com.hididi.gaslog.ui.components.EmptyHint
@@ -78,6 +83,8 @@ fun StatsScreen(vm: GasLogViewModel) {
     var customFrom by remember { mutableStateOf(today.minusDays(29)) }
     var customTo by remember { mutableStateOf(today) }
     var picking by remember { mutableStateOf<String?>(null) }
+    var selectedDay by remember { mutableStateOf<LocalDate?>(null) }
+    var highlightedDay by remember { mutableStateOf<LocalDate?>(null) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
@@ -93,17 +100,21 @@ fun StatsScreen(vm: GasLogViewModel) {
     val summary = remember(snapshot.readings, from, to) {
         UsageCalculator.summarize(snapshot.readings, from, to)
     }
+    val prevRange = remember(from, to) { UsageCalculator.previousPeriod(from, to) }
+    val estimateFrom = minOf(from, prevRange.first)
+    val estimateTo = maxOf(to, prevRange.second)
     val dataVersion by vm.dataVersion.collectAsStateWithLifecycle()
-    androidx.compose.runtime.LaunchedEffect(from, to) { vm.ensureSunTimes(from, to) }
-    val dayNight: DayNightUsage = remember(snapshot.readings, from, to, dataVersion) {
-        DayNightCalculator.compute(
+    androidx.compose.runtime.LaunchedEffect(estimateFrom, estimateTo) {
+        vm.ensureSunTimes(estimateFrom, estimateTo)
+    }
+    val temperatureEstimate = remember(snapshot.readings, estimateFrom, estimateTo, dataVersion) {
+        HeatingDegreeUsageEstimator.estimate(
             points = snapshot.readings,
-            from = from,
-            to = to,
+            from = estimateFrom,
+            to = estimateTo,
             sunProvider = { date -> vm.sunTimesFor(date) },
         )
     }
-    val prevRange = remember(from, to) { UsageCalculator.previousPeriod(from, to) }
     val prevSummary = remember(snapshot.readings, prevRange) {
         UsageCalculator.summarize(snapshot.readings, prevRange.first, prevRange.second)
     }
@@ -115,10 +126,20 @@ fun StatsScreen(vm: GasLogViewModel) {
             Dates.epochOf(from, 0, 0),
         ).state
     }
-    val quote = remember(snapshot.tiers, stateAtStart, summary.volumeM3) {
-        CostEngine.quote(stateAtStart, snapshot.tiers, summary.volumeM3)
+    val days = remember(summary.dayList, temperatureEstimate) {
+        summary.dayList.map { day ->
+            day.copy(volumeM3 = temperatureEstimate.dailyM3(day.date))
+        }
     }
-    val days = summary.dayList
+    val periodVolume = days.sumOf { it.volumeM3 }
+    val averagePerDay = if (days.isNotEmpty()) periodVolume / days.size else 0.0
+    val prevPeriodVolume = remember(prevSummary.dayList, temperatureEstimate) {
+        prevSummary.dayList.sumOf { temperatureEstimate.dailyM3(it.date) }
+    }
+    val dayNight: DayNightUsage = temperatureEstimate.dayNight()
+    val quote = remember(snapshot.tiers, stateAtStart, periodVolume) {
+        CostEngine.quote(stateAtStart, snapshot.tiers, periodVolume)
+    }
     val tempValues = remember(days) {
         days.map { d ->
             when {
@@ -187,8 +208,8 @@ fun StatsScreen(vm: GasLogViewModel) {
                         left = {
                             MetricTile(
                                 label = "用气量",
-                                value = "${Units.formatVolume(summary.volumeM3)} m³",
-                                sub = "有效天数 ${summary.daysWithData} 天，均摊估算 ${summary.estimatedDays} 天",
+                                value = "${Units.formatVolume(periodVolume)} m³",
+                                sub = "有效天数 ${summary.daysWithData} 天，模型估算 ${summary.estimatedDays} 天",
                             )
                         },
                         right = {
@@ -201,9 +222,9 @@ fun StatsScreen(vm: GasLogViewModel) {
                         },
                     )
                     Spacer(Modifier.height(10.dp))
-                    KeyValueRow("日均用气", "${Units.formatVolumeShort(summary.avgPerDayM3)} m³/天")
-                    val delta = summary.volumeM3 - prevSummary.volumeM3
-                    val pct = if (prevSummary.volumeM3 > 0.001) delta / prevSummary.volumeM3 * 100 else null
+                    KeyValueRow("日均用气", "${Units.formatVolumeShort(averagePerDay)} m³/天")
+                    val delta = periodVolume - prevPeriodVolume
+                    val pct = if (prevPeriodVolume > 0.001) delta / prevPeriodVolume * 100 else null
                     KeyValueRow(
                         "对比上一周期",
                         (if (delta >= 0) "+" else "") + Units.formatVolumeShort(delta) + " m³" +
@@ -256,7 +277,7 @@ fun StatsScreen(vm: GasLogViewModel) {
             item {
                 SectionCard(
                     title = "日间 / 夜间用气",
-                    subtitle = "按当地日出日落切分：日落至次日日出计为夜间",
+                    subtitle = "按逐小时气温、日出日落和采暖度估算分摊",
                 ) {
                     TwoColumnMetrics(
                         left = {
@@ -300,9 +321,8 @@ fun StatsScreen(vm: GasLogViewModel) {
                     }
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        "算法：把每两次读数之间的用量按小时均分，再按当地日出/日落把每个小时归到白天或夜间，" +
-                            "所以昼夜比例反映的是时段长短，而不是把 24 小时当成一回事。" +
-                            "如果同一天白天和晚上各拍一次，拆分就是精确值。" +
+                        "算法：按逐小时估算温度计算采暖度，结合当地日出/日落和夜间权重分摊两次读数之间的用量；" +
+                            "缺少气温的时段按时长均分。" +
                             "（本次用到 ${dayNight.sunDataDays} 天的日出日落数据，缺数据的日期按 07:00-19:00 兜底）",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -315,39 +335,47 @@ fun StatsScreen(vm: GasLogViewModel) {
                     if (days.isEmpty()) {
                         EmptyHint("该区间没有读数")
                     } else {
-                        Row(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
-                            Text("日期", Modifier.weight(1.1f), style = MaterialTheme.typography.labelSmall)
-                            Text("用量(m³)", Modifier.weight(1f), style = MaterialTheme.typography.labelSmall)
-                            Text("气温（℃）", Modifier.weight(1f), style = MaterialTheme.typography.labelSmall)
-                            Text("性质", Modifier.weight(0.8f), style = MaterialTheme.typography.labelSmall)
+                        Row(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+                            Text("日期", Modifier.weight(1.1f), style = MaterialTheme.typography.labelMedium)
+                            Text("用量(m³)", Modifier.weight(1f), style = MaterialTheme.typography.labelMedium)
+                            Text("气温（℃）", Modifier.weight(1f), style = MaterialTheme.typography.labelMedium)
+                            Text("性质", Modifier.weight(0.8f), style = MaterialTheme.typography.labelMedium)
                         }
                         days.takeLast(80).reversed().forEach { d ->
                             Row(
                                 Modifier
                                     .fillMaxWidth()
-                                    .padding(vertical = 4.dp),
+                                    .background(
+                                        if (highlightedDay == d.date) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
+                                        RoundedCornerShape(4.dp),
+                                    )
+                                    .clickable {
+                                        highlightedDay = d.date
+                                        selectedDay = d.date
+                                    }
+                                    .padding(horizontal = 4.dp, vertical = 8.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 Text(
                                     "${d.date.monthValue}/${d.date.dayOfMonth}",
                                     Modifier.weight(1.1f),
-                                    style = MaterialTheme.typography.bodySmall,
+                                    style = MaterialTheme.typography.bodyMedium,
                                 )
                                 Text(
                                     Units.formatVolume(d.volumeM3),
                                     Modifier.weight(1f),
-                                    style = MaterialTheme.typography.bodySmall,
+                                    style = MaterialTheme.typography.bodyMedium,
                                     fontWeight = FontWeight.Medium,
                                 )
                                 Text(
                                     DailyTemp(d.date, d.tempMinC, d.tempMaxC).valueLabel,
                                     Modifier.weight(1f),
-                                    style = MaterialTheme.typography.bodySmall,
+                                    style = MaterialTheme.typography.bodyMedium,
                                 )
                                 Text(
                                     if (d.readingCount == 0) "—" else if (d.exact) "精确" else "估算",
                                     Modifier.weight(0.8f),
-                                    style = MaterialTheme.typography.bodySmall,
+                                    style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
@@ -359,7 +387,7 @@ fun StatsScreen(vm: GasLogViewModel) {
                 NoticeCard(
                     "INFO",
                     "用量是怎么算出来的",
-                    "同一天两次拍照 → 当天精确用量；跨天两次读数 → 按间隔天数均摊。所以日均越准，越建议每天固定时间拍一次。",
+                    "同一天两次拍照 → 当天精确用量；跨天两次读数 → 按逐小时气温、日出日落和采暖度估算分摊。点击逐日明细可查看当天的估算曲线。",
                 )
             }
             item { Spacer(Modifier.height(24.dp)) }
@@ -390,6 +418,48 @@ fun StatsScreen(vm: GasLogViewModel) {
                 TextButton(onClick = { picking = null }) { Text("取消") }
             },
         ) { DatePicker(state = state) }
+    }
+
+    selectedDay?.let { date ->
+        val hourly = remember(temperatureEstimate, date) { temperatureEstimate.hourly(date) }
+        val sunTimes = remember(dataVersion, date) { vm.sunTimesFor(date) }
+        AlertDialog(
+            onDismissRequest = { selectedDay = null },
+            title = { Text("${Dates.formatDate(date)} 逐时估算") },
+            text = {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        sunTimes?.let { "日出 ${it.sunrise ?: "—"}，日落 ${it.sunset ?: "—"}" }
+                            ?: "日出日落数据未获取，按 07:00-19:00 估算白天",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (hourly.isEmpty()) {
+                        EmptyHint("当天没有可分摊的读数区间")
+                    } else {
+                        UsageTemperatureChart(
+                            series = CombinedChartSeries(
+                                usage = hourly.map { it.volumeM3 },
+                                temperatures = hourly.map { it.temperatureC },
+                                labels = hourly.map { "%02d:00".format(it.hour) },
+                            ),
+                        )
+                        hourly.forEach { slice ->
+                            KeyValueRow(
+                                "%02d:00".format(slice.hour),
+                                "${Units.formatVolume(slice.volumeM3)} m³  ·  ${slice.temperatureC?.let { String.format(Locale.US, "%.1f ℃", it) } ?: "气温缺失"}",
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { selectedDay = null }) { Text("关闭") } },
+        )
     }
 }
 

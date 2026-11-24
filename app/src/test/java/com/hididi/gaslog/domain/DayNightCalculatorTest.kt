@@ -1,6 +1,7 @@
 package com.hididi.gaslog.domain
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.LocalDate
@@ -95,5 +96,87 @@ class DayNightCalculatorTest {
             zone,
         )
         assertEquals(12.0 / 24.0, share, 0.02)
+    }
+
+    @Test
+    fun `heating degree allocation preserves an interval and weights colder night more`() {
+        val points = listOf(
+            point(1, "2026-11-01", "17:30", 1_000_000).copy(tempMinC = 10.0, tempMaxC = 20.0),
+            point(2, "2026-11-02", "17:30", 1_010_000).copy(tempMinC = 2.0, tempMaxC = 8.0),
+        )
+        val sun = { date: LocalDate ->
+            SunTimes(date, LocalTime.of(6, 0), LocalTime.of(18, 0))
+        }
+
+        val estimate = HeatingDegreeUsageEstimator.estimate(
+            points = points,
+            from = LocalDate.parse("2026-11-01"),
+            to = LocalDate.parse("2026-11-02"),
+            sunProvider = sun,
+            zone = zone,
+        )
+
+        assertTrue(estimate.usedTemperatureModel)
+        assertEquals(10.0, estimate.totalM3, 0.000_001)
+        assertTrue(estimate.dayNight().nightM3 > estimate.dayNight().dayM3)
+        val nov2 = estimate.hourly(LocalDate.parse("2026-11-02"))
+        assertTrue(nov2.isNotEmpty())
+        assertEquals(
+            estimate.dailyM3(LocalDate.parse("2026-11-02")),
+            nov2.sumOf { it.volumeM3 },
+            0.000_001,
+        )
+    }
+
+    @Test
+    fun `missing temperature falls back to duration allocation`() {
+        val points = listOf(
+            point(1, "2026-11-01", "06:00", 1_000_000),
+            point(2, "2026-11-01", "18:00", 1_012_000),
+        )
+
+        val estimate = HeatingDegreeUsageEstimator.estimate(
+            points = points,
+            from = LocalDate.parse("2026-11-01"),
+            to = LocalDate.parse("2026-11-01"),
+            sunProvider = { date -> SunTimes(date, LocalTime.of(6, 0), LocalTime.of(18, 0)) },
+            zone = zone,
+        )
+
+        assertTrue(!estimate.usedTemperatureModel)
+        assertEquals(12.0, estimate.totalM3, 0.000_001)
+        assertEquals(12.0, estimate.dayNight().dayM3, 0.000_001)
+    }
+
+    @Test
+    fun `interval longer than one month does not use weather or sun model`() {
+        val points = listOf(
+            point(1, "2026-10-01", "17:30", 1_000_000).copy(tempMinC = 2.0, tempMaxC = 8.0),
+            point(2, "2026-11-02", "17:30", 1_032_000).copy(tempMinC = 2.0, tempMaxC = 8.0),
+        )
+        var sunRequests = 0
+
+        val estimate = HeatingDegreeUsageEstimator.estimate(
+            points = points,
+            from = LocalDate.parse("2026-10-01"),
+            to = LocalDate.parse("2026-11-02"),
+            sunProvider = {
+                sunRequests++
+                SunTimes(it, LocalTime.of(6, 0), LocalTime.of(18, 0))
+            },
+            zone = zone,
+        )
+
+        assertFalse(estimate.usedTemperatureModel)
+        assertEquals(0, sunRequests)
+        assertTrue(estimate.hourlyEstimates.all { it.temperatureC == null })
+        assertEquals(32.0, estimate.totalM3, 0.000_001)
+        assertTrue(
+            HeatingDegreeUsageEstimator.modelDates(
+                points,
+                LocalDate.parse("2026-10-01"),
+                LocalDate.parse("2026-11-02"),
+            ).isEmpty(),
+        )
     }
 }

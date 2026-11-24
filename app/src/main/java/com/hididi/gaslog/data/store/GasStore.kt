@@ -20,17 +20,11 @@ data class ReadingSaveResult(
     val removedReadings: List<MeterReadingEntity>,
 )
 
-/**
- * 本地持久化。
- *
- * 家庭用气记录的数据量很小（一年最多几千条），因此不用数据库，直接落一个原子写入的 JSON 文件：
- *  - 无任何注解处理/ORM 依赖，构建与升级都不会坏数据；
- *  - 写入走"临时文件 + rename"，避免掉电/杀进程写坏；
- *  - 备份导出与内部存储格式一致，导入即是写回同一结构。
- */
+/** SQLite 是主存储；JSON 仅用于导入、导出和一次性迁移。 */
 class GasStore(context: Context) {
 
-    private val file = File(context.filesDir, "gaslog_data.json")
+    private val legacyFile = File(context.filesDir, "gaslog_data.json")
+    private val database = GasDatabase(context)
     private val mutex = Mutex()
 
     private val _readings = MutableStateFlow<List<MeterReadingEntity>>(emptyList())
@@ -47,16 +41,29 @@ class GasStore(context: Context) {
         if (loaded) return
         mutex.withLock {
             if (loaded) return@withLock
-            withContext(Dispatchers.IO) { readFromDisk() }
+            val snapshot = withContext(Dispatchers.IO) { loadSnapshot() }
+            _readings.value = snapshot.readings.sortedBy { it.epochMillis }
+            _tiers.value = snapshot.tiers.sortedBy { it.tierNo }
+            _payments.value = snapshot.payments.sortedBy { it.paidAtMillis }
             loaded = true
         }
     }
 
-    private fun readFromDisk() {
-        if (!file.exists()) return
-        runCatching {
-            val root = JSONObject(file.readText())
-            val readings = root.optJSONArray("readings")?.let { arr ->
+    private fun loadSnapshot(): GasDatabaseSnapshot {
+        val existing = database.readSnapshot()
+        if (existing.readings.isNotEmpty() || existing.tiers.isNotEmpty() || existing.payments.isNotEmpty() || !legacyFile.exists()) {
+            return existing
+        }
+        val migrated = parseSnapshot(legacyFile.readText())
+        database.replaceSnapshot(migrated)
+        val backup = File(legacyFile.parentFile, "${legacyFile.name}.migrated.bak")
+        if (!backup.exists()) legacyFile.renameTo(backup)
+        return migrated
+    }
+
+    private fun parseSnapshot(json: String): GasDatabaseSnapshot {
+        val root = JSONObject(json)
+        val readings = root.optJSONArray("readings")?.let { arr ->
                 (0 until arr.length()).mapNotNull { i ->
                     val o = arr.optJSONObject(i) ?: return@mapNotNull null
                     MeterReadingEntity(
@@ -77,7 +84,7 @@ class GasStore(context: Context) {
                     )
                 }
             } ?: emptyList()
-            val tiers = root.optJSONArray("tiers")?.let { arr ->
+        val tiers = root.optJSONArray("tiers")?.let { arr ->
                 (0 until arr.length()).mapNotNull { i ->
                     val o = arr.optJSONObject(i) ?: return@mapNotNull null
                     TariffTierEntity(
@@ -87,7 +94,7 @@ class GasStore(context: Context) {
                     )
                 }
             } ?: emptyList()
-            val payments = root.optJSONArray("payments")?.let { arr ->
+        val payments = root.optJSONArray("payments")?.let { arr ->
                 (0 until arr.length()).mapNotNull { i ->
                     val o = arr.optJSONObject(i) ?: return@mapNotNull null
                     PaymentEntity(
@@ -102,13 +109,10 @@ class GasStore(context: Context) {
                     )
                 }
             } ?: emptyList()
-            _readings.value = readings.sortedBy { it.epochMillis }
-            _tiers.value = tiers.sortedBy { it.tierNo }
-            _payments.value = payments.sortedBy { it.paidAtMillis }
-        }
+        return GasDatabaseSnapshot(readings, tiers, payments)
     }
 
-    private fun writeToDisk() {
+    private fun buildBackupJson(): String {
         val root = JSONObject()
         root.put("version", 1)
         val readingsArr = JSONArray()
@@ -163,16 +167,13 @@ class GasStore(context: Context) {
         }
         root.put("payments", paymentsArr)
 
-        val tmp = File(file.parentFile, file.name + ".tmp")
-        tmp.writeText(root.toString())
-        if (!tmp.renameTo(file)) {
-            file.writeText(tmp.readText())
-            tmp.delete()
-        }
+        return root.toString()
     }
 
     private suspend fun persist() {
-        withContext(Dispatchers.IO) { writeToDisk() }
+        withContext(Dispatchers.IO) {
+            database.replaceSnapshot(GasDatabaseSnapshot(_readings.value, _tiers.value, _payments.value))
+        }
     }
 
     // ---------------- 抄表记录 ----------------
@@ -281,19 +282,16 @@ class GasStore(context: Context) {
         persist()
     }
 
-    /** 备份导出：与内部存储同构，导入后可完整还原 */
+    /** 备份导出：兼容旧 JSON 格式，导入后可完整还原。 */
     suspend fun exportBackupJson(): String {
         ensureLoaded()
-        return withContext(Dispatchers.IO) {
-            if (!file.exists()) {
-                writeToDisk()
-            }
-            file.readText()
-        }
+        return withContext(Dispatchers.IO) { buildBackupJson() }
     }
 
     /** 导入备份：覆盖现有数据（调用前 UI 已提示） */
-    suspend fun importBackupJson(json: String): Pair<Int, Int> = mutex.withLock {
+    suspend fun importBackupJson(json: String): Pair<Int, Int> {
+        ensureLoaded()
+        return mutex.withLock {
         val root = JSONObject(json)
         var readingsBefore = _readings.value
         var addedReadings = 0
@@ -370,7 +368,8 @@ class GasStore(context: Context) {
             _payments.value = payments.sortedBy { it.paidAtMillis }
         }
         persist()
-        addedReadings to addedPayments
+            addedReadings to addedPayments
+        }
     }
 }
 

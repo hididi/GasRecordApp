@@ -6,6 +6,18 @@ import org.junit.Test
 class ReadingDetailSwipeTest {
 
     @Test
+    fun `committing a page switch immediately selects neighbor and keeps its visible position`() {
+        assertEquals(
+            DetailNavigationState(activeIndex = 2, offsetX = 700f),
+            detailNavigationState(activeIndex = 1, dragOffsetX = -300f, width = 1_000, direction = -1),
+        )
+        assertEquals(
+            DetailNavigationState(activeIndex = 0, offsetX = -700f),
+            detailNavigationState(activeIndex = 1, dragOffsetX = 300f, width = 1_000, direction = 1),
+        )
+    }
+
+    @Test
     fun `swipe settles on the available neighboring record after crossing threshold`() {
         assertEquals(
             DetailSwipeTarget.Previous,

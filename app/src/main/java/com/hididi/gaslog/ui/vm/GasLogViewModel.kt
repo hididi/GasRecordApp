@@ -10,6 +10,7 @@ import com.hididi.gaslog.data.store.PaymentEntity
 import com.hididi.gaslog.domain.BillingReplay
 import com.hididi.gaslog.domain.CostEngine
 import com.hididi.gaslog.domain.Dates
+import com.hididi.gaslog.domain.HeatingDegreeUsageEstimator
 import com.hididi.gaslog.domain.PaymentInfo
 import com.hididi.gaslog.domain.ReadingPoint
 import com.hididi.gaslog.domain.SunTimes
@@ -402,12 +403,8 @@ class GasLogViewModel(app: Application) : AndroidViewModel(app) {
         val lat = s.homeLat ?: return
         val lon = s.homeLon ?: return
         viewModelScope.launch {
-            var d = from
-            val dates = ArrayList<LocalDate>()
-            while (!d.isAfter(to) && dates.size < 400) {
-                dates += d
-                d = d.plusDays(1)
-            }
+            val dates = HeatingDegreeUsageEstimator.modelDates(snapshot.value.readings, from, to)
+            if (dates.isEmpty()) return@launch
             sunCache.ensure(weather, lat, lon, dates)
             _dataVersion.value = _dataVersion.value + 1
         }

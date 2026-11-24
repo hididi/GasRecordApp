@@ -31,6 +31,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -45,6 +46,7 @@ import coil.compose.AsyncImage
 import com.hididi.gaslog.domain.CostEngine
 import com.hididi.gaslog.domain.Dates
 import com.hididi.gaslog.domain.DayUsage
+import com.hididi.gaslog.domain.HeatingDegreeUsageEstimator
 import com.hididi.gaslog.domain.Insights
 import com.hididi.gaslog.domain.ReadingPoint
 import com.hididi.gaslog.domain.TierState
@@ -80,14 +82,27 @@ fun HomeScreen(
     val monthSummary = remember(snapshot.readings, monthStart) {
         UsageCalculator.summarize(snapshot.readings, monthStart, today)
     }
-    val todaySummary = remember(snapshot.readings, today) {
-        UsageCalculator.summarize(snapshot.readings, today, today)
+    val recentFrom = today.minusDays(59)
+    val dailyRecentBase = remember(snapshot.readings, today) {
+        UsageCalculator.dailyUsage(snapshot.readings, recentFrom, today)
     }
-    val dailyRecent = remember(snapshot.readings, today) {
-        UsageCalculator.dailyUsage(snapshot.readings, today.minusDays(59), today)
+    val dataVersion by vm.dataVersion.collectAsStateWithLifecycle()
+    LaunchedEffect(recentFrom, today) { vm.ensureSunTimes(recentFrom, today) }
+    val recentEstimate = remember(snapshot.readings, recentFrom, today, dataVersion) {
+        HeatingDegreeUsageEstimator.estimate(
+            points = snapshot.readings,
+            from = recentFrom,
+            to = today,
+            sunProvider = { date -> vm.sunTimesFor(date) },
+        )
+    }
+    val dailyRecent = remember(dailyRecentBase, recentEstimate) {
+        dailyRecentBase.map { day -> day.copy(volumeM3 = recentEstimate.dailyM3(day.date)) }
     }
     val todayUsage = dailyRecent.firstOrNull { it.date == today }
     val homeChartDays = dailyRecent.takeLast(14)
+    val monthDays = remember(dailyRecent, monthStart) { dailyRecent.filter { it.date >= monthStart } }
+    val monthVolume = monthDays.sumOf { it.volumeM3 }
     val state = remember(snapshot, today) { vm.currentTierState(snapshot) }
     val stateAtMonthStart = remember(snapshot, monthStart, today) {
         com.hididi.gaslog.domain.BillingReplay.replay(
@@ -97,9 +112,9 @@ fun HomeScreen(
             monthEpoch,
         ).state
     }
-    val monthCostCents = remember(snapshot.tiers, stateAtMonthStart, monthSummary.volumeM3) {
-        if (snapshot.tiers.isEmpty() || monthSummary.volumeM3 <= 0.0) 0L
-        else CostEngine.quote(stateAtMonthStart, snapshot.tiers, monthSummary.volumeM3).totalCents
+    val monthCostCents = remember(snapshot.tiers, stateAtMonthStart, monthVolume) {
+        if (snapshot.tiers.isEmpty() || monthVolume <= 0.0) 0L
+        else CostEngine.quote(stateAtMonthStart, snapshot.tiers, monthVolume).totalCents
     }
     val projection = remember(snapshot, today, state) {
         Insights.projectMonth(dailyRecent, today, state, snapshot.tiers)
@@ -177,16 +192,16 @@ fun HomeScreen(
         }
 
         item {
-            SectionCard(title = "今日", subtitle = "用量由两次读数差推算，标「估」的为均摊估算") {
+            SectionCard(title = "今日", subtitle = "用量由两次读数差推算，标「估」的按气温、日出日落与采暖度估算") {
                 TwoColumnMetrics(
                     left = {
                         MetricTile(
                             label = "今日用气",
-                            value = "${Units.formatVolume(todaySummary.volumeM3)} m³",
+                            value = "${Units.formatVolume(todayUsage?.volumeM3 ?: 0.0)} m³",
                             sub = when {
                                 todayUsage == null -> "暂无可计算的读数差"
                                 todayUsage.exact -> "当天多次读数，精确"
-                                else -> "按读数差均摊估算"
+                                else -> "按气温、日出日落与采暖度估算"
                             },
                             estimated = todayUsage?.exact == false,
                         )
@@ -233,8 +248,8 @@ fun HomeScreen(
                     left = {
                         MetricTile(
                             label = "本月已用",
-                            value = "${Units.formatVolume(monthSummary.volumeM3)} m³",
-                            sub = "日均 ${Units.formatVolumeShort(monthSummary.avgPerDayM3)} m³",
+                            value = "${Units.formatVolume(monthVolume)} m³",
+                            sub = "日均 ${Units.formatVolumeShort(if (monthSummary.days > 0) monthVolume / monthSummary.days else 0.0)} m³",
                         )
                     },
                     right = {
@@ -266,7 +281,7 @@ fun HomeScreen(
                 state = state,
                 stateAtMonthStart = stateAtMonthStart,
                 tiers = snapshot.tiers,
-                monthVolume = monthSummary.volumeM3,
+                monthVolume = monthVolume,
                 onOpenBilling = onOpenBilling,
             )
         }

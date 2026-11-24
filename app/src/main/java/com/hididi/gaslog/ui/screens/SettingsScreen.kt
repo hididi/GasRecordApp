@@ -423,7 +423,7 @@ fun SettingsScreen(vm: GasLogViewModel) {
                     )
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        "表数精度 0.001 m³；用量按「两次读数差 ÷ 天数」推算，越规律抄表越准确。",
+                        "表数精度 0.001 m³；跨日用量按气温、日出日落与采暖度分摊，越规律抄表越准确。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
