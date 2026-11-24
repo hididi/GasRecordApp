@@ -43,6 +43,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.hididi.gaslog.BuildConfig
 import com.hididi.gaslog.domain.CostEngine
 import com.hididi.gaslog.domain.Dates
 import com.hididi.gaslog.domain.Units
@@ -414,7 +415,7 @@ fun SettingsScreen(vm: GasLogViewModel) {
 
             item {
                 SectionCard(title = "关于") {
-                    Text("家用燃气记录 v1.0", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                    Text("家用燃气记录 v${BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
                     Text(
                         "拍照/相册导入 → 离线识别表数 → 记录拍摄时间与当日气温 → 推算日/月/区间用气量与阶梯气费。",
                         style = MaterialTheme.typography.bodySmall,

@@ -32,6 +32,9 @@ import androidx.compose.ui.unit.sp
 fun firstNonZeroDigitIndex(cells: String, total: Int): Int =
     cells.take(total).indexOfFirst { it in '1'..'9' }.takeIf { it >= 0 } ?: 0
 
+fun initialFocusDigitIndex(cells: String, total: Int, historicalMaxCells: String?): Int =
+    firstNonZeroDigitIndex(historicalMaxCells ?: cells, total)
+
 /**
  * 抄表输入器：按燃气表"黑字整数 + 红字小数"的样子逐位输入。
  *
@@ -45,6 +48,7 @@ fun MeterDigitInput(
     cells: String,
     integerCount: Int,
     decimalCount: Int,
+    historicalMaxCells: String? = null,
     onCellsChange: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -57,8 +61,8 @@ fun MeterDigitInput(
             cells.drop(integerCount).padEnd(decimalCount, '0')
     }
     var focused by remember(total) { mutableStateOf<Int?>(null) }
-    // 未选中任何格子时，光标停在第一个空位
-    val activeIndex = focused ?: firstNonZeroDigitIndex(cells, total)
+    // 首次输入时以历史最大读数定位；无历史记录时沿用当前输入的第一个非零位。
+    val activeIndex = focused ?: initialFocusDigitIndex(cells, total, historicalMaxCells)
     val cellHeight = 56
 
     Column(modifier) {

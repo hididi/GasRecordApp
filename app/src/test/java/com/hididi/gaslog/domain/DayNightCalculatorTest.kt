@@ -69,6 +69,24 @@ class DayNightCalculatorTest {
     }
 
     @Test
+    fun `cross day usage is limited to the selected date range`() {
+        val points = listOf(
+            point(1, "2026-06-01", "00:00", 1_000_000),
+            point(2, "2026-06-11", "00:00", 1_010_000), // 10 m³ over 10 days
+        )
+
+        val result = DayNightCalculator.compute(
+            points,
+            LocalDate.parse("2026-06-05"),
+            LocalDate.parse("2026-06-05"),
+            { date -> SunTimes(date, LocalTime.of(5, 0), LocalTime.of(19, 0)) },
+            zone,
+        )
+
+        assertEquals(1.0, result.totalM3, 0.05)
+    }
+
+    @Test
     fun `falls back to 7 to 19 without sun data`() {
         val share = DayNightCalculator.daylightShare(
             ts("2026-06-01", "00:00"),

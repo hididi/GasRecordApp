@@ -4,6 +4,15 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+val buildNumber = runCatching {
+    val process = ProcessBuilder("git", "rev-list", "--count", "HEAD")
+        .directory(rootDir)
+        .start()
+    val output = process.inputStream.bufferedReader().use { it.readText() }
+    check(process.waitFor() == 0)
+    output.trim().toInt()
+}.getOrDefault(1).coerceAtLeast(1)
+
 android {
     namespace = "com.hididi.gaslog"
     compileSdk = 34
@@ -13,8 +22,8 @@ android {
         applicationId = "com.hididi.gaslog"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = buildNumber
+        versionName = "1.0.$buildNumber"
         vectorDrawables { useSupportLibrary = true }
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -59,6 +68,7 @@ android {
     }
 
     buildFeatures {
+        buildConfig = true
         compose = true
     }
 

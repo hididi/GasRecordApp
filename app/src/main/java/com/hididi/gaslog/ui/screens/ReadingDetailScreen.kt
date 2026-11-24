@@ -45,6 +45,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
@@ -67,6 +68,26 @@ import java.io.File
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
+
+internal enum class DetailSwipeTarget {
+    Previous,
+    Current,
+    Next,
+}
+
+internal fun detailSwipeTarget(
+    dragOffsetX: Float,
+    contentWidth: Int,
+    hasPrevious: Boolean,
+    hasNext: Boolean,
+): DetailSwipeTarget {
+    val threshold = contentWidth * 0.15f
+    return when {
+        dragOffsetX > threshold && hasPrevious -> DetailSwipeTarget.Previous
+        dragOffsetX < -threshold && hasNext -> DetailSwipeTarget.Next
+        else -> DetailSwipeTarget.Current
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -109,9 +130,10 @@ fun ReadingDetailScreen(
         settleJob?.cancel()
         settleJob = scope.launch {
             animateOffset(direction * width)
-            dragOffsetX = -direction * width
             currentId = id
-            animateOffset(0f)
+            // The target page is already visible at this offset. Resetting both
+            // state values keeps it in place when it becomes the current page.
+            dragOffsetX = 0f
         }
     }
 
@@ -156,33 +178,69 @@ fun ReadingDetailScreen(
                         onDragStart = { settleJob?.cancel() },
                         onDragCancel = { springBack() },
                         onDragEnd = {
-                            val threshold = contentWidth * 0.2f
-                            when {
-                                dragOffsetX > threshold && idx > 0 ->
+                            when (detailSwipeTarget(
+                                dragOffsetX = dragOffsetX,
+                                contentWidth = contentWidth,
+                                hasPrevious = idx > 0,
+                                hasNext = idx < sorted.lastIndex,
+                            )) {
+                                DetailSwipeTarget.Previous ->
                                     navigateTo(sorted[idx - 1].id, 1)
-                                dragOffsetX < -threshold && idx < sorted.lastIndex ->
+                                DetailSwipeTarget.Next ->
                                     navigateTo(sorted[idx + 1].id, -1)
-                                else -> springBack()
+                                DetailSwipeTarget.Current -> springBack()
                             }
                         },
                         onHorizontalDrag = { change, amount ->
                             change.consume()
-                            dragOffsetX += amount
+                            val isDraggingPastStart = amount > 0f && idx == 0
+                            val isDraggingPastEnd = amount < 0f && idx == sorted.lastIndex
+                            dragOffsetX += if (isDraggingPastStart || isDraggingPastEnd) amount * 0.35f else amount
                         },
                     )
                 },
         ) {
-            DetailContent(
-                modifier = Modifier.offset { IntOffset(dragOffsetX.roundToInt(), 0) },
-                reading = reading,
-                prev = sorted.getOrNull(idx - 1),
-                next = sorted.getOrNull(idx + 1),
-                allReadings = snapshot.readings,
-                onShowZoom = { showZoom = true },
-                onRefreshWeather = { vm.refreshWeatherForDate(Dates.dateOf(reading.epochMillis)) },
-                onPrevious = { sorted.getOrNull(idx - 1)?.let { navigateTo(it.id, 1) } },
-                onNext = { sorted.getOrNull(idx + 1)?.let { navigateTo(it.id, -1) } },
-            )
+            Box(Modifier.fillMaxSize().clipToBounds()) {
+                sorted.getOrNull(idx - 1)?.let { previous ->
+                    DetailPage(
+                        modifier = Modifier.offset { IntOffset(dragOffsetX.roundToInt() - contentWidth, 0) },
+                        reading = previous,
+                        sorted = sorted,
+                        index = idx - 1,
+                        allReadings = snapshot.readings,
+                        onShowZoom = { showZoom = true },
+                        onRefreshWeather = { vm.refreshWeatherForDate(Dates.dateOf(previous.epochMillis)) },
+                        onPrevious = {},
+                        onNext = {},
+                        navigationEnabled = false,
+                    )
+                }
+                sorted.getOrNull(idx + 1)?.let { next ->
+                    DetailPage(
+                        modifier = Modifier.offset { IntOffset(dragOffsetX.roundToInt() + contentWidth, 0) },
+                        reading = next,
+                        sorted = sorted,
+                        index = idx + 1,
+                        allReadings = snapshot.readings,
+                        onShowZoom = { showZoom = true },
+                        onRefreshWeather = { vm.refreshWeatherForDate(Dates.dateOf(next.epochMillis)) },
+                        onPrevious = {},
+                        onNext = {},
+                        navigationEnabled = false,
+                    )
+                }
+                DetailPage(
+                    modifier = Modifier.offset { IntOffset(dragOffsetX.roundToInt(), 0) },
+                    reading = reading,
+                    sorted = sorted,
+                    index = idx,
+                    allReadings = snapshot.readings,
+                    onShowZoom = { showZoom = true },
+                    onRefreshWeather = { vm.refreshWeatherForDate(Dates.dateOf(reading.epochMillis)) },
+                    onPrevious = { sorted.getOrNull(idx - 1)?.let { navigateTo(it.id, 1) } },
+                    onNext = { sorted.getOrNull(idx + 1)?.let { navigateTo(it.id, -1) } },
+                )
+            }
         }
     }
 
@@ -208,17 +266,20 @@ fun ReadingDetailScreen(
 }
 
 @Composable
-private fun DetailContent(
+private fun DetailPage(
     modifier: Modifier = Modifier,
     reading: ReadingPoint,
-    prev: ReadingPoint?,
-    next: ReadingPoint?,
+    sorted: List<ReadingPoint>,
+    index: Int,
     allReadings: List<ReadingPoint>,
     onShowZoom: () -> Unit,
     onRefreshWeather: () -> Unit,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
+    navigationEnabled: Boolean = true,
 ) {
+    val prev = sorted.getOrNull(index - 1)
+    val next = sorted.getOrNull(index + 1)
     val dayUsage = UsageCalculator.dailyUsage(
         allReadings,
         Dates.dateOf(reading.epochMillis),
@@ -330,9 +391,9 @@ private fun DetailContent(
         }
         item {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton(onClick = onPrevious, enabled = prev != null) { Text("← 上一条") }
+                TextButton(onClick = onPrevious, enabled = navigationEnabled && prev != null) { Text("← 上一条") }
                 Spacer(Modifier.weight(1f))
-                TextButton(onClick = onNext, enabled = next != null) { Text("下一条 →") }
+                TextButton(onClick = onNext, enabled = navigationEnabled && next != null) { Text("下一条 →") }
             }
         }
         item { Spacer(Modifier.height(20.dp)) }

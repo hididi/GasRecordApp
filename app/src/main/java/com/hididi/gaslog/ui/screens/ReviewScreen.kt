@@ -108,6 +108,13 @@ fun ReviewScreen(
     }
     val topCandidate = d.ocrCandidates.firstOrNull()
     val digitMismatch = topCandidate != null && topCandidate.digits.length != d.totalDigits
+    val historicalMaxCells = remember(snapshot.readings, d.editingId, d.integerCount, d.decimalCount) {
+        snapshot.readings
+            .asSequence()
+            .filter { it.id != d.editingId }
+            .maxByOrNull { it.readingMilli }
+            ?.let { ReadingDraft.cellsFrom(Units.formatReading(it.readingMilli), d.integerCount, d.decimalCount) }
+    }
 
     Scaffold(
         topBar = {
@@ -232,6 +239,7 @@ fun ReviewScreen(
                         cells = d.cells,
                         integerCount = d.integerCount,
                         decimalCount = d.decimalCount,
+                        historicalMaxCells = historicalMaxCells,
                         onCellsChange = { v -> vm.updateCurrent { it.copy(cells = v, error = null) } },
                     )
                     if (!d.manual) {

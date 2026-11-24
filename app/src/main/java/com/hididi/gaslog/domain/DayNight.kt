@@ -59,6 +59,8 @@ object DayNightCalculator {
         var nightM3 = 0.0
         var sunDays = 0
         val days = ((to.toEpochDay() - from.toEpochDay()).toInt() + 1).coerceAtLeast(1)
+        val rangeStart = from.atStartOfDay(zone).toInstant().toEpochMilli()
+        val rangeEnd = to.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
 
         // 同日多次读数：直接按时刻拆分
         val byDay = sorted.groupBy { Dates.dateOf(it.epochMillis) }
@@ -83,20 +85,22 @@ object DayNightCalculator {
         // 跨天间隔：按小时均分到昼夜
         val intervals = UsageCalculator.buildIntervals(sorted)
         intervals.filter { it.spanDays > 0 }.filter { !it.resetDetected }.forEach { iv ->
-            val startDate = Dates.dateOf(iv.startEpochMillis)
-            val endDate = Dates.dateOf(iv.endEpochMillis)
-            if (endDate < from || startDate > to) return@forEach
-            var date = startDate
-            while (!date.isAfter(endDate)) {
+            val start = maxOf(iv.startEpochMillis, rangeStart)
+            val end = minOf(iv.endEpochMillis, rangeEnd)
+            if (end <= start) return@forEach
+            var date = java.time.Instant.ofEpochMilli(start).atZone(zone).toLocalDate()
+            val lastDate = java.time.Instant.ofEpochMilli(end - 1).atZone(zone).toLocalDate()
+            while (!date.isAfter(lastDate)) {
                 if (sunProvider(date) != null) sunDays++
                 date = date.plusDays(1)
             }
-            val share = daylightShare(iv.startEpochMillis, iv.endEpochMillis, sunProvider, zone)
-            dayM3 += iv.volumeM3 * share
-            nightM3 += iv.volumeM3 * (1 - share)
+            val volume = iv.volumeM3 * (end - start).toDouble() /
+                (iv.endEpochMillis - iv.startEpochMillis)
+            val share = daylightShare(start, end, sunProvider, zone)
+            dayM3 += volume * share
+            nightM3 += volume * (1 - share)
         }
 
-        // 裁到目标区间：按比例归一（区间外的时间不参与）
         return DayNightUsage(dayM3, nightM3, sunDays, days)
     }
 

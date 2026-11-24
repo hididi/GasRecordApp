@@ -16,6 +16,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -41,8 +42,8 @@ data class CombinedChartSeries(
 fun UsageTemperatureChart(
     series: CombinedChartSeries,
     modifier: Modifier = Modifier,
-    barColor: Color = MaterialTheme.colorScheme.primary,
-    lineColor: Color = MaterialTheme.colorScheme.tertiary,
+    barColor: Color = Color(0xFF1565C0),
+    lineColor: Color = Color(0xFFE65100),
     markers: List<Boolean> = emptyList(),
 ) {
     val onSurfaceVariant = MaterialTheme.colorScheme.onSurfaceVariant
@@ -54,27 +55,31 @@ fun UsageTemperatureChart(
     }
 
     val temperaturePoints = series.temperatures.filterNotNull()
-    Canvas(modifier.fillMaxWidth().height(190.dp).padding(top = 8.dp)) {
+    val density = LocalDensity.current
+    val axisTextSize = with(density) { 11.sp.toPx() }
+    val valueTextSize = with(density) { 13.sp.toPx() }
+    val bottomSpace = with(density) { 11.sp.toPx() + 10.dp.toPx() }
+    val topSpace = with(density) { 13.sp.toPx() + 8.dp.toPx() }
+    val valueGap = with(density) { 4.dp.toPx() }
+    Canvas(modifier.fillMaxWidth().height(210.dp).padding(top = 8.dp)) {
         val labelPaint = android.graphics.Paint().apply {
             color = onSurfaceVariant.toArgb()
-            textSize = 22f
+            textSize = axisTextSize
             textAlign = android.graphics.Paint.Align.CENTER
             isAntiAlias = true
         }
         val usagePaint = android.graphics.Paint().apply {
             color = barColor.toArgb()
-            textSize = 20f
+            textSize = valueTextSize
             textAlign = android.graphics.Paint.Align.CENTER
             isAntiAlias = true
         }
         val temperaturePaint = android.graphics.Paint().apply {
             color = lineColor.toArgb()
-            textSize = 20f
+            textSize = valueTextSize
             textAlign = android.graphics.Paint.Align.CENTER
             isAntiAlias = true
         }
-        val bottomSpace = 26f
-        val topSpace = 26f
         val chartHeight = size.height - bottomSpace - topSpace
         val maxUsage = series.usage.maxOrNull()?.coerceAtLeast(0.001) ?: 0.001
         val temperatureMin = temperaturePoints.minOrNull() ?: 0.0
@@ -105,7 +110,7 @@ fun UsageTemperatureChart(
                 drawContext.canvas.nativeCanvas.drawText(
                     String.format(java.util.Locale.US, "%.1f", value),
                     slot * index + slot / 2f,
-                    (y - 4f).coerceAtLeast(12f),
+                    (y - valueGap).coerceAtLeast(valueTextSize),
                     usagePaint,
                 )
             }
@@ -126,7 +131,7 @@ fun UsageTemperatureChart(
                 drawContext.canvas.nativeCanvas.drawText(
                     String.format(java.util.Locale.US, "%.1f", value),
                     x,
-                    (y - 6f).coerceAtLeast(12f),
+                    (y - valueGap).coerceAtLeast(valueTextSize),
                     temperaturePaint,
                 )
             }
