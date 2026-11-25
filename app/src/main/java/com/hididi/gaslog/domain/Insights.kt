@@ -126,16 +126,6 @@ object Insights {
             }
         }
 
-        // 5) 同日多读数：精确数据说明
-        val multi = daily.filter { it.readingCount >= 2 }.sortedByDescending { it.date }.firstOrNull()
-        if (multi != null) {
-            out += Insight(
-                InsightLevel.INFO,
-                "当天有两次以上读数",
-                "${Dates.formatDate(multi.date)} 两次读数的差值 " +
-                    "${Units.formatVolume(multi.volumeM3)} m³ 就是当天精确用量。",
-            )
-        }
         return out
     }
 

@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -20,7 +21,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Share
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
@@ -29,6 +29,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -46,6 +47,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.hididi.gaslog.domain.CostEngine
 import com.hididi.gaslog.domain.DayNightUsage
@@ -250,7 +253,7 @@ fun StatsScreen(vm: GasLogViewModel) {
                 }
             }
             item {
-                SectionCard(title = "当日气温与用气", subtitle = "柱图为每日用气，折线为当日平均气温（℃）") {
+                SectionCard(title = "气温与用气", subtitle = "柱图为每日用气，折线为当日平均气温（℃）") {
                     UsageTemperatureChart(
                         series = CombinedChartSeries(
                             usage = days.map { it.volumeM3 },
@@ -258,6 +261,8 @@ fun StatsScreen(vm: GasLogViewModel) {
                             labels = tempLabels,
                         ),
                         markers = days.map { it.exact },
+                        barColor = MaterialTheme.colorScheme.primary,
+                        lineColor = MaterialTheme.colorScheme.tertiary,
                     )
                     val corr = UsageCalculator.pearson(
                         days.filter { it.tempMaxC != null && it.volumeM3 > 0 }
@@ -423,43 +428,57 @@ fun StatsScreen(vm: GasLogViewModel) {
     selectedDay?.let { date ->
         val hourly = remember(temperatureEstimate, date) { temperatureEstimate.hourly(date) }
         val sunTimes = remember(dataVersion, date) { vm.sunTimesFor(date) }
-        AlertDialog(
+        Dialog(
             onDismissRequest = { selectedDay = null },
-            title = { Text("${Dates.formatDate(date)} 逐时估算") },
-            text = {
-                Column(
-                    Modifier
-                        .fillMaxWidth()
-                        .verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Text(
-                        sunTimes?.let { "日出 ${it.sunrise ?: "—"}，日落 ${it.sunset ?: "—"}" }
-                            ?: "日出日落数据未获取，按 07:00-19:00 估算白天",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    if (hourly.isEmpty()) {
-                        EmptyHint("当天没有可分摊的读数区间")
-                    } else {
-                        UsageTemperatureChart(
-                            series = CombinedChartSeries(
-                                usage = hourly.map { it.volumeM3 },
-                                temperatures = hourly.map { it.temperatureC },
-                                labels = hourly.map { "%02d:00".format(it.hour) },
-                            ),
+            properties = DialogProperties(usePlatformDefaultWidth = false),
+        ) {
+            Surface(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                shape = MaterialTheme.shapes.large,
+                tonalElevation = 6.dp,
+            ) {
+                Column(Modifier.padding(16.dp)) {
+                    Text("${Dates.formatDate(date)} 逐时估算", style = MaterialTheme.typography.titleLarge)
+                    Spacer(Modifier.height(12.dp))
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 600.dp)
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(
+                            sunTimes?.let { "日出 ${it.sunrise ?: "—"}，日落 ${it.sunset ?: "—"}" }
+                                ?: "日出日落数据未获取，按 07:00-19:00 估算白天",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
-                        hourly.forEach { slice ->
-                            KeyValueRow(
-                                "%02d:00".format(slice.hour),
-                                "${Units.formatVolume(slice.volumeM3)} m³  ·  ${slice.temperatureC?.let { String.format(Locale.US, "%.1f ℃", it) } ?: "气温缺失"}",
+                        if (hourly.isEmpty()) {
+                            EmptyHint("当天没有可分摊的读数区间")
+                        } else {
+                            UsageTemperatureChart(
+                                series = CombinedChartSeries(
+                                    usage = hourly.map { it.volumeM3 },
+                                    temperatures = hourly.map { it.temperatureC },
+                                    labels = hourly.map { "%02d:00".format(it.hour) },
+                                ),
+                                barColor = MaterialTheme.colorScheme.primary,
+                                lineColor = MaterialTheme.colorScheme.tertiary,
                             )
+                            hourly.forEach { slice ->
+                                KeyValueRow(
+                                    "%02d:00".format(slice.hour),
+                                    "${Units.formatVolume(slice.volumeM3)} m³  ·  ${slice.temperatureC?.let { String.format(Locale.US, "%.1f ℃", it) } ?: "气温缺失"}",
+                                )
+                            }
                         }
                     }
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                        TextButton(onClick = { selectedDay = null }) { Text("关闭") }
+                    }
                 }
-            },
-            confirmButton = { TextButton(onClick = { selectedDay = null }) { Text("关闭") } },
-        )
+            }
+        }
     }
 }
 

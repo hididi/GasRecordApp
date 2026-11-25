@@ -37,7 +37,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -53,13 +52,11 @@ import com.hididi.gaslog.domain.TierState
 import com.hididi.gaslog.domain.Units
 import com.hididi.gaslog.domain.UsageCalculator
 import com.hididi.gaslog.ui.components.KeyValueRow
-import com.hididi.gaslog.ui.components.CombinedChartSeries
 import com.hididi.gaslog.ui.components.MetricTile
 import com.hididi.gaslog.ui.components.NoticeCard
 import com.hididi.gaslog.ui.components.Pill
 import com.hididi.gaslog.ui.components.SectionCard
 import com.hididi.gaslog.ui.components.TwoColumnMetrics
-import com.hididi.gaslog.ui.components.UsageTemperatureChart
 import com.hididi.gaslog.ui.vm.GasLogViewModel
 import java.io.File
 
@@ -100,7 +97,6 @@ fun HomeScreen(
         dailyRecentBase.map { day -> day.copy(volumeM3 = recentEstimate.dailyM3(day.date)) }
     }
     val todayUsage = dailyRecent.firstOrNull { it.date == today }
-    val homeChartDays = dailyRecent.takeLast(14)
     val monthDays = remember(dailyRecent, monthStart) { dailyRecent.filter { it.date >= monthStart } }
     val monthVolume = monthDays.sumOf { it.volumeM3 }
     val state = remember(snapshot, today) { vm.currentTierState(snapshot) }
@@ -214,24 +210,6 @@ fun HomeScreen(
                             accent = MaterialTheme.colorScheme.secondary,
                         )
                     },
-                )
-            }
-        }
-
-        item {
-            SectionCard(title = "当日气温与用气", subtitle = "柱图为每日用气，折线为当日平均气温（℃）") {
-                UsageTemperatureChart(
-                    series = CombinedChartSeries(
-                        usage = homeChartDays.map { it.volumeM3 },
-                        temperatures = homeChartDays.map { day ->
-                            when {
-                                day.tempMinC != null && day.tempMaxC != null -> (day.tempMinC + day.tempMaxC) / 2
-                                else -> null
-                            }
-                        },
-                        labels = homeChartDays.map { "${it.date.monthValue}/${it.date.dayOfMonth}" },
-                    ),
-                    markers = homeChartDays.map { it.exact },
                 )
             }
         }
