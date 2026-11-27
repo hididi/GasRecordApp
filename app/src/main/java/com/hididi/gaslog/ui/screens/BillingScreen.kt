@@ -98,8 +98,10 @@ fun BillingScreen(vm: GasLogViewModel) {
             Dates.epochOf(from, 0, 0),
         ).state
     }
-    val rangeSummary = remember(snapshot.readings, from, to) {
-        UsageCalculator.summarize(snapshot.readings, from, to)
+    val dataVersion by vm.dataVersion.collectAsStateWithLifecycle()
+    androidx.compose.runtime.LaunchedEffect(from, to) { vm.ensureDailyTemps(from, to) }
+    val rangeSummary = remember(snapshot.readings, from, to, dataVersion) {
+        UsageCalculator.summarize(snapshot.readings, from, to) { d -> vm.dailyTempFor(d) }
     }
     val recentFrom = today.minusDays(29)
     val dailyBase = remember(snapshot.readings, today) {
@@ -107,7 +109,6 @@ fun BillingScreen(vm: GasLogViewModel) {
     }
     val estimateFrom = minOf(from, recentFrom)
     val estimateTo = maxOf(to, today)
-    val dataVersion by vm.dataVersion.collectAsStateWithLifecycle()
     LaunchedEffect(estimateFrom, estimateTo) { vm.ensureSunTimes(estimateFrom, estimateTo) }
     val usageEstimate = remember(snapshot.readings, estimateFrom, estimateTo, dataVersion) {
         HeatingDegreeUsageEstimator.estimate(
@@ -115,6 +116,7 @@ fun BillingScreen(vm: GasLogViewModel) {
             from = estimateFrom,
             to = estimateTo,
             sunProvider = { date -> vm.sunTimesFor(date) },
+            dailyTemp = { date -> vm.dailyTempFor(date) },
         )
     }
     val rangeDays = remember(rangeSummary.dayList, usageEstimate) {

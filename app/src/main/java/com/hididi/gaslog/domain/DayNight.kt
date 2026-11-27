@@ -215,12 +215,19 @@ object HeatingDegreeUsageEstimator {
         to: LocalDate,
         sunProvider: (LocalDate) -> SunTimes?,
         zone: ZoneId = Dates.zone,
+        /** 当天没有读数时的气温（来自天气缓存），保证缺口日也能参与模型 */
+        dailyTemp: (LocalDate) -> Pair<Double?, Double?>? = { null },
     ): HeatingDegreeEstimate {
         if (from > to) return HeatingDegreeEstimate(emptyList(), false, 0, 0)
         val rangeStart = from.atStartOfDay(zone).toInstant().toEpochMilli()
         val rangeEnd = to.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
-        val temperatures = points.groupBy { Dates.dateOf(it.epochMillis) }.mapValues { (_, readings) ->
+        val readingTemps = points.groupBy { Dates.dateOf(it.epochMillis) }.mapValues { (_, readings) ->
             readings.mapNotNull { it.tempMinC }.minOrNull() to readings.mapNotNull { it.tempMaxC }.maxOrNull()
+        }
+        fun tempsOf(date: LocalDate): Pair<Double?, Double?>? {
+            val cached = dailyTemp(date)
+            if (cached != null && (cached.first != null || cached.second != null)) return cached
+            return readingTemps[date]
         }
         val sunCache = HashMap<LocalDate, SunTimes?>()
         fun sun(date: LocalDate): SunTimes? = sunCache.getOrPut(date) { sunProvider(date) }
@@ -234,15 +241,18 @@ object HeatingDegreeUsageEstimator {
             if (end <= start) return@forEach
             val useModel = interval.spanDays <= MAX_MODEL_SPAN_DAYS
             val slices = if (useModel) {
-                slices(start, end, temperatures, ::sun, zone)
+                slices(start, end, ::tempsOf, ::sun, zone)
             } else {
                 // shortcut: 超过 31 天不跨采暖季推断；需要跨季模型时再引入采暖季设置。
-                slices(start, end, emptyMap(), { null }, zone)
+                slices(start, end, { null }, { null }, zone)
             }
-            val hasTemperature = useModel && slices.any { it.temperatureC != null }
-            if (hasTemperature) usedTemperatureModel = true
-            val weights = if (useModel) slices.map { slice ->
-                val degree = slice.temperatureC?.let { max(0.0, 18.0 - it) } ?: 1.0
+            // 只有整段都有气温时才用温度加权；否则一律按时长均分。
+            // 否则"缺气温的时段权重=1、有气温的时段权重=5~11"会让缺口那天被严重少分。
+            val allSlicesHaveTemperature = useModel && slices.isNotEmpty() &&
+                slices.all { it.temperatureC != null }
+            if (allSlicesHaveTemperature) usedTemperatureModel = true
+            val weights = if (allSlicesHaveTemperature) slices.map { slice ->
+                val degree = max(0.0, 18.0 - (slice.temperatureC ?: 0.0))
                 // 同温条件下夜间用气略高，避免把昼夜长度本身当作用气差异。
                 val nightFactor = if (slice.daylight) 0.65 else 1.0
                 degree * nightFactor * slice.durationMillis
@@ -258,9 +268,31 @@ object HeatingDegreeUsageEstimator {
                 out += HourlyUsageEstimate(slice.date, slice.hour, slice.temperatureC, volume)
             }
         }
+        // 相邻两个读数区间可能落在同一个整点（例如 18:24 前一段结束、后一段开始），
+        // 必须按「日期+小时」合并，否则列表会出现两行相同时间、图表也会画成两根柱子而不是相加。
+        val merged = LinkedHashMap<Pair<LocalDate, Int>, HourlyUsageEstimate>()
+        out.forEach { item ->
+            val key = item.date to item.hour
+            val old = merged[key]
+            merged[key] = if (old == null) {
+                item
+            } else {
+                val volume = old.volumeM3 + item.volumeM3
+                val temperature = when {
+                    old.temperatureC == null -> item.temperatureC
+                    item.temperatureC == null -> old.temperatureC
+                    volume > 0.0 ->
+                        (old.temperatureC * old.volumeM3 + item.temperatureC * item.volumeM3) / volume
+                    else -> old.temperatureC
+                }
+                HourlyUsageEstimate(item.date, item.hour, temperature, volume)
+            }
+        }
+        val hourly = merged.values.sortedWith(compareBy({ it.date }, { it.hour }))
+
         val days = (to.toEpochDay() - from.toEpochDay()).toInt() + 1
         return HeatingDegreeEstimate(
-            hourlyEstimates = out,
+            hourlyEstimates = hourly,
             usedTemperatureModel = usedTemperatureModel,
             sunDataDays = sunCache.values.count { it != null },
             totalDays = days,
@@ -271,7 +303,7 @@ object HeatingDegreeUsageEstimator {
     private fun slices(
         start: Long,
         end: Long,
-        temperatures: Map<LocalDate, Pair<Double?, Double?>>,
+        tempsOf: (LocalDate) -> Pair<Double?, Double?>?,
         sun: (LocalDate) -> SunTimes?,
         zone: ZoneId,
     ): List<Slice> {
@@ -283,7 +315,7 @@ object HeatingDegreeUsageEstimator {
                 .plusHours(1).atZone(zone).toInstant().toEpochMilli()
             val sliceEnd = minOf(nextHour, end)
             val date = dateTime.toLocalDate()
-            val (minTemp, maxTemp) = temperatures[date] ?: (null to null)
+            val (minTemp, maxTemp) = tempsOf(date) ?: (null to null)
             out += Slice(
                 date = date,
                 hour = dateTime.hour,

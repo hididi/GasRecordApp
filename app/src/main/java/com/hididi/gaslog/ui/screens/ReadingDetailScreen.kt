@@ -145,6 +145,7 @@ fun ReadingDetailScreen(
                 from = from,
                 to = to,
                 sunProvider = { date -> vm.sunTimesFor(date) },
+            dailyTemp = { date -> vm.dailyTempFor(date) },
             )
         }
         val dayUsage = remember(snapshot.readings, visibleDates, usageEstimate) {

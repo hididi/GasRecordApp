@@ -20,6 +20,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AssistChip
+import androidx.compose.ui.unit.sp
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
@@ -171,12 +173,12 @@ fun SettingsScreen(vm: GasLogViewModel) {
             }
 
             item {
-                SectionCard(title = "气温自动获取") {
+                SectionCard(title = "气温自动获取", subtitle = "只发送经纬度与日期") {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             Text("导入照片时自动查询当日气温", style = MaterialTheme.typography.bodyMedium)
                             Text(
-                                "数据来源 Open-Meteo 历史天气，只发送经纬度与日期，不上传照片和表数。",
+                                "数据源可在下面选择；不上传照片和表数。",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -185,6 +187,89 @@ fun SettingsScreen(vm: GasLogViewModel) {
                             checked = settings.autoWeather,
                             onCheckedChange = { vm.setAutoWeather(it) },
                         )
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    Text("数据源", style = MaterialTheme.typography.labelMedium)
+                    Spacer(Modifier.height(4.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        AssistChip(
+                            onClick = { vm.setWeatherProvider("openmeteo", settings.caiyunToken) },
+                            label = {
+                                Text(
+                                    if (settings.weatherProvider == "openmeteo") "Open-Meteo（当前，免 Key）" else "Open-Meteo（免 Key）",
+                                    fontSize = 11.sp,
+                                )
+                            },
+                        )
+                        AssistChip(
+                            onClick = { vm.setWeatherProvider("caiyun", settings.caiyunToken) },
+                            label = {
+                                Text(
+                                    if (settings.weatherProvider == "caiyun") "彩云天气（当前）" else "彩云天气（需 token）",
+                                    fontSize = 11.sp,
+                                )
+                            },
+                        )
+                    }
+                    if (settings.weatherProvider == "caiyun") {
+                        Spacer(Modifier.height(8.dp))
+                        var token by remember { mutableStateOf(settings.caiyunToken) }
+                        OutlinedTextField(
+                            value = token,
+                            onValueChange = { token = it },
+                            label = { Text("彩云天气 API Token") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                            visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        Button(onClick = {
+                            vm.setWeatherProvider("caiyun", token)
+                            message = if (token.isBlank()) "已保存空 token（会回退到 Open-Meteo）" else "彩云天气已启用"
+                        }) { Text("保存 Token") }
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "小米等国产天气常用彩云数据，数值会更接近手机上的显示；彩云免费档每天 1000 次调用足够家用。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    Text("气温校正（可选）", style = MaterialTheme.typography.labelMedium)
+                    Text(
+                        "如果和家里手机上的天气长期差一个固定值，可以整体平移，保持记录口径一致。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    var minOff by remember { mutableStateOf(settings.tempMinOffsetC.toPlainText()) }
+                    var maxOff by remember { mutableStateOf(settings.tempMaxOffsetC.toPlainText()) }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedTextField(
+                            value = minOff,
+                            onValueChange = { v -> minOff = v.filter { it.isDigit() || it == '-' || it == '.' } },
+                            label = { Text("最低温 +℃") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                            modifier = Modifier.weight(1f),
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        OutlinedTextField(
+                            value = maxOff,
+                            onValueChange = { v -> maxOff = v.filter { it.isDigit() || it == '-' || it == '.' } },
+                            label = { Text("最高温 +℃") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                            modifier = Modifier.weight(1f),
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Button(onClick = {
+                            vm.setTempOffset(
+                                Units.parseDoubleOrNull(minOff) ?: 0.0,
+                                Units.parseDoubleOrNull(maxOff) ?: 0.0,
+                            )
+                            message = "气温校正已保存"
+                        }) { Text("保存") }
                     }
                 }
             }
@@ -500,3 +585,7 @@ private suspend fun currentLocation(context: Context): Pair<Double, Double>? = w
 object BuildConfigBits {
     const val VERSION = "1.0"
 }
+
+
+private fun Double.toPlainText(): String =
+    if (this == toInt().toDouble()) toInt().toString() else String.format(java.util.Locale.US, "%.1f", this)

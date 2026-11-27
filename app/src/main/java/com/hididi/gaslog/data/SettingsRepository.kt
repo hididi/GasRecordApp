@@ -22,6 +22,15 @@ data class AppSettings(
     /** 表盘位数：整数位（黑字）与小数位（红字），用于抄表输入器与识别切分 */
     val integerDigits: Int = 5,
     val decimalDigits: Int = 3,
+    /**
+     * 气温校正（℃）。Open-Meteo 是全球模式网格值，与本地气象站/城市预报常有 1~3℃ 差异，
+     * 这里允许按自家口径整体平移，保证长期记录的一致性。
+     */
+    /** 气温数据源：openmeteo（默认，免 Key）/ caiyun（需 token，接近国产天气 App 的数值） */
+    val weatherProvider: String = "openmeteo",
+    val caiyunToken: String = "",
+    val tempMinOffsetC: Double = 0.0,
+    val tempMaxOffsetC: Double = 0.0,
     /** 兜底识别用的视觉大模型（OpenAI 兼容接口） */
     val aiApiKey: String = "",
     val aiBaseUrl: String = "https://api.deepseek.com/chat/completions",
@@ -45,6 +54,10 @@ class SettingsRepository(private val context: Context) {
         reminderMinute = prefs.getInt("reminderMinute", 0),
         billingYearStartMonth = prefs.getInt("billingYearStartMonth", 1),
         billingYearStartDay = prefs.getInt("billingYearStartDay", 1),
+        weatherProvider = prefs.getString("weatherProvider", "openmeteo") ?: "openmeteo",
+        caiyunToken = prefs.getString("caiyunToken", "") ?: "",
+        tempMinOffsetC = prefs.getFloat("tempMinOffsetC", 0f).toDouble(),
+        tempMaxOffsetC = prefs.getFloat("tempMaxOffsetC", 0f).toDouble(),
         integerDigits = prefs.getInt("integerDigits", 5),
         decimalDigits = prefs.getInt("decimalDigits", 3),
         aiApiKey = prefs.getString("aiApiKey", "") ?: "",
@@ -66,6 +79,10 @@ class SettingsRepository(private val context: Context) {
             .putInt("reminderMinute", next.reminderMinute)
             .putInt("billingYearStartMonth", next.billingYearStartMonth)
             .putInt("billingYearStartDay", next.billingYearStartDay)
+            .putString("weatherProvider", next.weatherProvider)
+            .putString("caiyunToken", next.caiyunToken)
+            .putFloat("tempMinOffsetC", next.tempMinOffsetC.toFloat())
+            .putFloat("tempMaxOffsetC", next.tempMaxOffsetC.toFloat())
             .putInt("integerDigits", next.integerDigits)
             .putInt("decimalDigits", next.decimalDigits)
             .putString("aiApiKey", next.aiApiKey)

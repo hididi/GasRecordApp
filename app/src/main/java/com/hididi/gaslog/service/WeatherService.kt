@@ -67,6 +67,24 @@ class WeatherService(private val context: Context) {
             }.getOrNull()
         }
 
+    /**
+     * 彩云天气（Caiyun）每日温度。小米/部分国产天气 App 的数据与之相近，需要用户自己的 token。
+     * 注意彩云接口的坐标顺序是「经度,纬度」。
+     */
+    suspend fun fetchDailyCaiyun(
+        lat: Double,
+        lon: Double,
+        date: LocalDate,
+        token: String,
+    ): Result<DailyTemp> = withContext(Dispatchers.IO) {
+        runCatching {
+            val url = "https://api.caiyunapp.com/v2.6/%s/%.4f,%.4f/daily?dailysteps=7&alert=false"
+                .format(token, lon, lat)
+            val json = httpGet(url) ?: error("网络请求失败")
+            parseCaiyunDaily(json, date)
+        }
+    }
+
     private fun parseDaily(json: String, date: LocalDate): DailyTemp {
         val root = JSONObject(json)
         val daily = root.optJSONObject("daily") ?: error("返回数据缺少 daily 字段")
@@ -108,6 +126,9 @@ class WeatherService(private val context: Context) {
         }.getOrNull()
     }
 
+    private fun parseCaiyunDaily(json: String, date: LocalDate): DailyTemp =
+        com.hididi.gaslog.service.parseCaiyunDailyJson(json, date)
+
     private fun httpGet(url: String): String? = runCatching {
         val conn = (URL(url).openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
@@ -127,4 +148,24 @@ class WeatherService(private val context: Context) {
             conn.disconnect()
         }
     }.getOrNull()
+}
+
+/** 解析彩云天气 /v2.6 daily 返回，取出指定日期的最低/最高温（℃）。 */
+internal fun parseCaiyunDailyJson(json: String, date: java.time.LocalDate): DailyTemp {
+    val root = JSONObject(json)
+    if (root.optString("status", "") != "ok") {
+        error(root.optString("error", "彩云接口返回异常"))
+    }
+    val arr = root.getJSONObject("result").getJSONObject("daily").getJSONArray("temperature")
+    for (i in 0 until arr.length()) {
+        val o = arr.getJSONObject(i)
+        val day = o.optString("date", "").take(10)
+        if (day == date.toString()) {
+            val max = o.optDouble("max", Double.NaN).takeIf { !it.isNaN() }
+            val min = o.optDouble("min", Double.NaN).takeIf { !it.isNaN() }
+            if (max == null && min == null) error("彩云天气返回该日气温为空")
+            return DailyTemp(date, min, max)
+        }
+    }
+    error("彩云天气没有 ${date} 的数据（可能超出 7 天范围）")
 }

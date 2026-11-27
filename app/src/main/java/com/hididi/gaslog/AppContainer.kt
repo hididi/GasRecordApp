@@ -3,6 +3,7 @@ package com.hididi.gaslog
 import android.content.Context
 import com.hididi.gaslog.data.GasRepository
 import com.hididi.gaslog.data.SettingsRepository
+import com.hididi.gaslog.service.DailyTempCache
 import com.hididi.gaslog.service.SunTimesCache
 import com.hididi.gaslog.service.WeatherService
 
@@ -15,4 +16,5 @@ class AppContainer(context: Context) {
     val settings = SettingsRepository(appContext)
     val weather = WeatherService(appContext)
     val sunCache = SunTimesCache(appContext)
+    val dailyTempCache = DailyTempCache(appContext)
 }

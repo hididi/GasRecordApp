@@ -384,7 +384,7 @@ fun ReviewScreen(
                     Spacer(Modifier.height(4.dp))
                     Text(
                         when (d.weatherStatus) {
-                            "OK" -> "已按 App 里设置的位置查询历史天气（只发送经纬度与日期）"
+                            "OK" -> "Open-Meteo 全球模式网格值（${d.latitude?.let { "%.3f, %.3f".format(it, d.longitude ?: 0.0) } ?: "坐标未知"}）。与手机自带天气（本地气象站/城市预报）通常差 1~3℃。"
                             "NO_LOCATION" -> "还没有位置：请在设置里填家庭位置，或手动填写气温"
                             "FAILED" -> "联网获取失败，可重试或手动填写"
                             "MANUAL" -> "已关闭自动获取，当前为手动填写"

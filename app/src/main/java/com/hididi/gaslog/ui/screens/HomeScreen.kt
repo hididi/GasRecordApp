@@ -76,14 +76,15 @@ fun HomeScreen(
 
     val monthStart = today.withDayOfMonth(1)
     val monthEpoch = Dates.epochOf(monthStart, 0, 0)
-    val monthSummary = remember(snapshot.readings, monthStart) {
-        UsageCalculator.summarize(snapshot.readings, monthStart, today)
+    val dataVersion by vm.dataVersion.collectAsStateWithLifecycle()
+    androidx.compose.runtime.LaunchedEffect(monthStart, today) { vm.ensureDailyTemps(monthStart, today) }
+    val monthSummary = remember(snapshot.readings, monthStart, dataVersion) {
+        UsageCalculator.summarize(snapshot.readings, monthStart, today) { d -> vm.dailyTempFor(d) }
     }
     val recentFrom = today.minusDays(59)
     val dailyRecentBase = remember(snapshot.readings, today) {
         UsageCalculator.dailyUsage(snapshot.readings, recentFrom, today)
     }
-    val dataVersion by vm.dataVersion.collectAsStateWithLifecycle()
     LaunchedEffect(recentFrom, today) { vm.ensureSunTimes(recentFrom, today) }
     val recentEstimate = remember(snapshot.readings, recentFrom, today, dataVersion) {
         HeatingDegreeUsageEstimator.estimate(
@@ -91,6 +92,7 @@ fun HomeScreen(
             from = recentFrom,
             to = today,
             sunProvider = { date -> vm.sunTimesFor(date) },
+            dailyTemp = { date -> vm.dailyTempFor(date) },
         )
     }
     val dailyRecent = remember(dailyRecentBase, recentEstimate) {

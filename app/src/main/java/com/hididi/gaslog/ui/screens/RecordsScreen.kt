@@ -88,6 +88,7 @@ fun RecordsScreen(
             from = fromTo.first,
             to = fromTo.second,
             sunProvider = { date -> vm.sunTimesFor(date) },
+            dailyTemp = { date -> vm.dailyTempFor(date) },
         )
     }
     val dayUsage = remember(dayUsageBase, usageEstimate) {

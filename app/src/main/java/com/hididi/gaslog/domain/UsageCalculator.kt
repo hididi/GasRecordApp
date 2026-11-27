@@ -91,8 +91,16 @@ object UsageCalculator {
         return out
     }
 
-    /** 生成 [from, to] 区间内每天的用量（区间之外的数据只用来做基准） */
-    fun dailyUsage(points: List<ReadingPoint>, from: LocalDate, to: LocalDate): List<DayUsage> {
+    /**
+     * 生成 [from, to] 区间内每天的用量（区间之外的数据只用来做基准）。
+     * tempProvider 用来补"当天没有抄表、但气温可以从天气缓存拿到"的日子。
+     */
+    fun dailyUsage(
+        points: List<ReadingPoint>,
+        from: LocalDate,
+        to: LocalDate,
+        tempProvider: (LocalDate) -> Pair<Double?, Double?>? = { null },
+    ): List<DayUsage> {
         val sorted = points.sortedBy { it.epochMillis }
         if (sorted.isEmpty() || from > to) return emptyList()
 
@@ -172,7 +180,13 @@ object UsageCalculator {
         val out = ArrayList<DayUsage>()
         var cur = from
         while (!cur.isAfter(to)) {
-            result[cur]?.let { out += it }
+            result[cur]?.let { day ->
+                val provided = tempProvider(day.date)
+                out += if (provided == null) day else day.copy(
+                    tempMinC = provided.first ?: day.tempMinC,
+                    tempMaxC = provided.second ?: day.tempMaxC,
+                )
+            }
             cur = cur.plusDays(1)
         }
         return out
@@ -205,8 +219,13 @@ object UsageCalculator {
         }
     }
 
-    fun summarize(points: List<ReadingPoint>, from: LocalDate, to: LocalDate): UsageSummary {
-        val days = dailyUsage(points, from, to)
+    fun summarize(
+        points: List<ReadingPoint>,
+        from: LocalDate,
+        to: LocalDate,
+        tempProvider: (LocalDate) -> Pair<Double?, Double?>? = { null },
+    ): UsageSummary {
+        val days = dailyUsage(points, from, to, tempProvider)
         val total = days.sumOf { it.volumeM3 }
         val daysWithData = days.count { it.readingCount > 0 }
         val dayCount = (to.toEpochDay() - from.toEpochDay()).toInt() + 1

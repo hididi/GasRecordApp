@@ -100,15 +100,16 @@ fun StatsScreen(vm: GasLogViewModel) {
         StatPreset.CUSTOM -> customFrom to customTo
     }
 
-    val summary = remember(snapshot.readings, from, to) {
-        UsageCalculator.summarize(snapshot.readings, from, to)
+    val dataVersion by vm.dataVersion.collectAsStateWithLifecycle()
+    val summary = remember(snapshot.readings, from, to, dataVersion) {
+        UsageCalculator.summarize(snapshot.readings, from, to) { date -> vm.dailyTempFor(date) }
     }
     val prevRange = remember(from, to) { UsageCalculator.previousPeriod(from, to) }
     val estimateFrom = minOf(from, prevRange.first)
     val estimateTo = maxOf(to, prevRange.second)
-    val dataVersion by vm.dataVersion.collectAsStateWithLifecycle()
     androidx.compose.runtime.LaunchedEffect(estimateFrom, estimateTo) {
         vm.ensureSunTimes(estimateFrom, estimateTo)
+        vm.ensureDailyTemps(estimateFrom, estimateTo)
     }
     val temperatureEstimate = remember(snapshot.readings, estimateFrom, estimateTo, dataVersion) {
         HeatingDegreeUsageEstimator.estimate(
@@ -116,10 +117,13 @@ fun StatsScreen(vm: GasLogViewModel) {
             from = estimateFrom,
             to = estimateTo,
             sunProvider = { date -> vm.sunTimesFor(date) },
+            dailyTemp = { date -> vm.dailyTempFor(date) },
         )
     }
-    val prevSummary = remember(snapshot.readings, prevRange) {
-        UsageCalculator.summarize(snapshot.readings, prevRange.first, prevRange.second)
+    val prevSummary = remember(snapshot.readings, prevRange, dataVersion) {
+        UsageCalculator.summarize(snapshot.readings, prevRange.first, prevRange.second) { date ->
+            vm.dailyTempFor(date)
+        }
     }
     val stateAtStart = remember(snapshot, from) {
         com.hididi.gaslog.domain.BillingReplay.replay(

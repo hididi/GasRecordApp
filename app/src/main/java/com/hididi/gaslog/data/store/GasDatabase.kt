@@ -51,6 +51,20 @@ class GasDatabase(context: Context) : SQLiteOpenHelper(context.applicationContex
         snapshot.payments.forEach { insertOrThrow("payments", null, it.values()) }
     }
 
+    /** 通用键值缓存（引用同一张 cache 表），单键读写，不影响其它缓存条目 */
+    fun cacheValue(key: String): String? = readableDatabase.query(
+        "sun_times", arrayOf("value"), "cacheKey=?", arrayOf(key), null, null, null,
+    ).use { c -> if (c.moveToFirst()) c.getString(0) else null }
+
+    fun putCacheValue(key: String, value: String) {
+        writableDatabase.insertWithOnConflict(
+            "sun_times",
+            null,
+            ContentValues().apply { put("cacheKey", key); put("value", value) },
+            SQLiteDatabase.CONFLICT_REPLACE,
+        )
+    }
+
     fun readSunTimes(): Map<String, String> = readableDatabase.query(
         "sun_times", arrayOf("cacheKey", "value"), null, null, null, null, null,
     ).use { c -> buildMap { while (c.moveToNext()) put(c.getString(0), c.getString(1)) } }

@@ -82,5 +82,8 @@ class SunTimesCache(context: Context) {
         }
     }
 
-    private fun persist() = database.replaceSunTimes(synchronized(cacheLock) { cache.toMap() })
+    private fun persist() {
+        // 逐条 upsert：这张表还兼作通用缓存，不能整体替换
+        synchronized(cacheLock) { cache.toMap() }.forEach { (key, value) -> database.putCacheValue(key, value) }
+    }
 }

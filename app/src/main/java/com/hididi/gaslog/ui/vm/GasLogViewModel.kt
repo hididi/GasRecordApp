@@ -116,6 +116,7 @@ class GasLogViewModel(app: Application) : AndroidViewModel(app) {
     val settingsRepo = container.settings
     private val weather = container.weather
     private val sunCache = container.sunCache
+    private val dailyTempCache = container.dailyTempCache
     private val aiVision = AiVisionService(app)
 
     val settings = settingsRepo.settings
@@ -343,17 +344,27 @@ class GasLogViewModel(app: Application) : AndroidViewModel(app) {
         updateItem(index, key) { it.copy(weatherBusy = true, latitude = lat, longitude = lon) }
         viewModelScope.launch {
             val date = Dates.dateOf(draft.epochMillis)
-            val result = weather.fetchDaily(lat, lon, date)
+            val result = fetchDailyTemp(lat, lon, date)
             val name = s.homeLabel.ifBlank {
                 withContext(Dispatchers.IO) { weather.describeLocation(lat, lon) } ?: ""
+            }
+            if (result.isSuccess) {
+                val okTemp = result.getOrNull()
+                if (okTemp != null) {
+                    dailyTempCache.put(
+                        lat, lon, date,
+                        okTemp.tempMinC?.let { v -> v + settingsRepo.settings.value.tempMinOffsetC },
+                        okTemp.tempMaxC?.let { v -> v + settingsRepo.settings.value.tempMaxOffsetC },
+                    )
+                }
             }
             updateItem(index, key) { cur ->
                 if (result.isSuccess) {
                     val t = result.getOrThrow()
                     cur.copy(
                         weatherBusy = false,
-                        tempMinC = t.tempMinC,
-                        tempMaxC = t.tempMaxC,
+                        tempMinC = t.tempMinC?.let { v -> v + settingsRepo.settings.value.tempMinOffsetC },
+                        tempMaxC = t.tempMaxC?.let { v -> v + settingsRepo.settings.value.tempMaxOffsetC },
                         weatherStatus = "OK",
                         locationName = cur.locationName ?: name.ifBlank { null },
                     )
@@ -378,15 +389,86 @@ class GasLogViewModel(app: Application) : AndroidViewModel(app) {
             val lat = s.homeLat
             val lon = s.homeLon
             if (lat == null || lon == null) return@launch
-            val result = weather.fetchDaily(lat, lon, date)
+            val result = fetchDailyTemp(lat, lon, date)
             val readings = repo.readingsOnce().filter { Dates.dateOf(it.epochMillis) == date }
             if (result.isSuccess) {
                 val t = result.getOrThrow()
-                readings.forEach { repo.updateWeather(it.id, t.tempMinC, t.tempMaxC, "OK") }
+                val minOffset = s.tempMinOffsetC
+                val maxOffset = s.tempMaxOffsetC
+                readings.forEach {
+                    repo.updateWeather(
+                        it.id,
+                        t.tempMinC?.let { v -> v + minOffset },
+                        t.tempMaxC?.let { v -> v + maxOffset },
+                        "OK",
+                    )
+                }
                 sunCache.ensure(weather, lat, lon, listOf(date))
             } else {
                 readings.forEach { repo.updateWeather(it.id, it.tempMinC, it.tempMaxC, "FAILED") }
             }
+        }
+    }
+
+    /** 某天的气温（与有没有抄表无关），来自天气缓存 */
+    fun dailyTempFor(date: LocalDate): Pair<Double?, Double?>? {
+        val s = settingsRepo.settings.value
+        val lat = s.homeLat ?: return null
+        val lon = s.homeLon ?: return null
+        return dailyTempCache.get(lat, lon, date)
+    }
+
+    /**
+     * 补拉区间内缺失日期的气温（例如故意跳过一天没抄表，那天的气温也要补上），
+     * 补到缓存后逐日表、采暖度模型都能用上。
+     */
+    fun ensureDailyTemps(from: LocalDate, to: LocalDate) {
+        val s = settingsRepo.settings.value
+        if (!s.autoWeather) return
+        val lat = s.homeLat ?: return
+        val lon = s.homeLon ?: return
+        viewModelScope.launch {
+            var date = from
+            var fetched = 0
+            var changed = false
+            var attempts = 0
+            while (!date.isAfter(to) && attempts < 40) {
+                if (dailyTempCache.get(lat, lon, date) == null) {
+                    attempts++
+                    val r = fetchDailyTemp(lat, lon, date)
+                    if (r.isSuccess) {
+                        val t = r.getOrThrow()
+                        dailyTempCache.put(
+                            lat, lon, date,
+                            t.tempMinC?.let { v -> v + s.tempMinOffsetC },
+                            t.tempMaxC?.let { v -> v + s.tempMaxOffsetC },
+                        )
+                        fetched++
+                        changed = true
+                    }
+                }
+                date = date.plusDays(1)
+            }
+            if (changed) _dataVersion.value = _dataVersion.value + 1
+            if (fetched > 0) {
+                // 已存记录里若有当天缺气温的，顺便回填
+                backfillReadingTemps(from, to)
+            }
+        }
+    }
+
+    /** 把缓存里的每日气温回填到当天的历史记录上（只补空缺） */
+    private suspend fun backfillReadingTemps(from: LocalDate, to: LocalDate) {
+        val s = settingsRepo.settings.value
+        val lat = s.homeLat ?: return
+        val lon = s.homeLon ?: return
+        val readings = repo.readingsOnce()
+        readings.forEach { r ->
+            val date = Dates.dateOf(r.epochMillis)
+            if (date < from || date > to) return@forEach
+            if (r.tempMinC != null && r.tempMaxC != null) return@forEach
+            val cached = dailyTempCache.get(lat, lon, date) ?: return@forEach
+            repo.updateWeather(r.id, cached.first, cached.second, "OK")
         }
     }
 
@@ -591,6 +673,39 @@ class GasLogViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setAutoWeather(enabled: Boolean) {
         settingsRepo.update { it.copy(autoWeather = enabled) }
+    }
+
+    fun setWeatherProvider(provider: String, caiyunToken: String) {
+        settingsRepo.update {
+            it.copy(
+                weatherProvider = provider,
+                caiyunToken = caiyunToken.trim(),
+                autoWeather = if (provider == "caiyun") true else it.autoWeather,
+            )
+        }
+    }
+
+    /** 取某天某地的气温：按设置选择数据源，彩云失败时回退到 Open-Meteo */
+    private suspend fun fetchDailyTemp(
+        lat: Double,
+        lon: Double,
+        date: LocalDate,
+    ): Result<com.hididi.gaslog.domain.DailyTemp> {
+        val s = settingsRepo.settings.value
+        if (s.weatherProvider == "caiyun" && s.caiyunToken.isNotBlank()) {
+            val caiyun = weather.fetchDailyCaiyun(lat, lon, date, s.caiyunToken)
+            if (caiyun.isSuccess) return caiyun
+        }
+        return weather.fetchDaily(lat, lon, date)
+    }
+
+    fun setTempOffset(minOffset: Double, maxOffset: Double) {
+        settingsRepo.update {
+            it.copy(
+                tempMinOffsetC = minOffset.coerceIn(-10.0, 10.0),
+                tempMaxOffsetC = maxOffset.coerceIn(-10.0, 10.0),
+            )
+        }
     }
 
     fun setDigitDefaults(integerCount: Int, decimalCount: Int) {
